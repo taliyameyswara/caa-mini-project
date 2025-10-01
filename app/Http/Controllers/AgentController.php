@@ -13,5 +13,19 @@ class AgentController extends Controller
         return Agent::with('chatRooms')->get();
     }
 
-    // update max customer
+    public function updateMaxCustomers(Request $request, $id)
+    {
+        $request->validate([
+            'max_customers' => 'required|integer|min:1'
+        ]);
+
+        $agent = Agent::findOrFail($id);
+        $agent->max_customers = $request->max_customers;
+        $agent->save();
+
+        return response()->json([
+            'message' => 'Max customers updated successfully',
+            'agent' => $agent,
+        ], 200);
+    }
 }

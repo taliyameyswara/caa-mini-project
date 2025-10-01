@@ -36,7 +36,6 @@ class ChatRoomController extends Controller
         $roomId = null;
         $isResolved = false;
 
-        // kondisi 1: chat baru (room_id ada di root payload)
         if (isset($payload['room_id'])) {
             $roomId = $payload['room_id'];
             $isResolved = $payload['is_resolved'] ?? false;
@@ -98,12 +97,10 @@ class ChatRoomController extends Controller
         //  2. ambil semua chat room dengan status 'unserved'
         $unservedRooms = ChatRoom::where('status', 'unserved')->orderBy('created_at', 'asc')->get();
 
-
         $availableAgentIds = collect($agents)
             ->filter(fn($a) => $a['is_available'] === true)
             ->pluck('id')
             ->toArray();
-
 
         //  3. looping setiap chat_room unserved:
         foreach ($unservedRooms as $room) {
