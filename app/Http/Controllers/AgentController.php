@@ -15,17 +15,25 @@ class AgentController extends Controller
 
     public function updateMaxCustomers(Request $request, $id)
     {
-        $request->validate([
-            'max_customers' => 'required|integer|min:1'
-        ]);
+        try {
+            $request->validate([
+                'max_customers' => 'required|integer|min:1'
+            ]);
 
-        $agent = Agent::findOrFail($id);
-        $agent->max_customers = $request->max_customers;
-        $agent->save();
+            $agent = Agent::findOrFail($id);
+            $agent->max_customers = $request->max_customers;
+            $agent->save();
 
-        return response()->json([
-            'message' => 'Max customers updated successfully',
-            'agent' => $agent,
-        ], 200);
+            return response()->json([
+                'success' => true,
+                'message' => 'Max customers updated successfully',
+                'data'    => $agent,
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 500);
+        }
     }
 }

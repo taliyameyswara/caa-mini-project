@@ -10,7 +10,6 @@ use Illuminate\Support\Facades\Log;
 
 class ChatRoomController extends Controller
 {
-
     protected $qiscus_agent_id;
     protected $qiscus_app_id;
     protected $qiscus_secret_key;
@@ -20,117 +19,167 @@ class ChatRoomController extends Controller
     {
         $this->qiscus_base_url = env("QISCUS_BASE_URL");
         $this->qiscus_agent_id = env("QISCUS_AGENT_ID");
-        $this->qiscus_app_id = env("QISCUS_APP_ID");
+        $this->qiscus_app_id   = env("QISCUS_APP_ID");
         $this->qiscus_secret_key = env("QISCUS_SECRET_KEY");
     }
 
     public function index()
     {
-        return ChatRoom::with('agent')->get();
+        try {
+            $chatRooms = ChatRoom::with('agent')->get();
+
+            return response()->json([
+                'success' => true,
+                'data'    => $chatRooms
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengambil data chat room: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     public function saveChatRoom(Request $request)
     {
-        $payload = $request->all();
+        try {
+            $payload = $request->all();
 
-        $roomId = null;
-        $isResolved = false;
+            $roomId     = null;
+            $isResolved = false;
 
-        if (isset($payload['room_id'])) {
-            $roomId = $payload['room_id'];
-            $isResolved = $payload['is_resolved'] ?? false;
-        } elseif (isset($payload['service']['room_id'])) {
-            $roomId = $payload['service']['room_id'];
-            $isResolved = $payload['service']['is_resolved'] ?? false;
+            if (isset($payload['room_id'])) {
+                // kondisi 1: chat baru
+                $roomId     = $payload['room_id'];
+                $isResolved = $payload['is_resolved'] ?? false;
+            } elseif (isset($payload['service']['room_id'])) {
+                // kondisi 2: chat diresolve
+                $roomId     = $payload['service']['room_id'];
+                $isResolved = $payload['service']['is_resolved'] ?? false;
+            }
+
+            $chatRoom = ChatRoom::updateOrCreate(
+                ['qiscus_room_id' => $roomId],
+                [
+                    'status'      => $isResolved ? 'resolved' : 'unserved',
+                    'resolved_at' => $isResolved ? now() : null,
+                ]
+            );
+
+            return response()->json([
+                'success'   => true,
+                'chat_room' => $chatRoom
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal menyimpan chat room: ' . $e->getMessage()
+            ], 500);
         }
-
-        $chatRoom = ChatRoom::updateOrCreate(
-            ['qiscus_room_id' => $roomId],
-            [
-                'status'      => $isResolved ? 'resolved' : 'unserved',
-                'resolved_at' => $isResolved ? now() : null,
-            ]
-        );
-
-        return response()->json([
-            'success'   => true,
-            'chat_room' => $chatRoom
-        ]);
     }
 
     public function getAllQiscusAgents()
     {
-        $response = Http::withHeaders([
-            "Qiscus-Secret-Key" => $this->qiscus_secret_key,
-            "Qiscus-App-Id" => $this->qiscus_app_id,
-        ])->get($this->qiscus_base_url . "/api/v2/admin/agents?page=&limit&search&scope");
+        try {
+            $response = Http::withHeaders([
+                "Qiscus-Secret-Key" => $this->qiscus_secret_key,
+                "Qiscus-App-Id"     => $this->qiscus_app_id,
+            ])->get($this->qiscus_base_url . "/api/v2/admin/agents?page=&limit&search&scope");
 
-        return $response->json();
+            return $response->json();
+        } catch (\Exception $e) {
+            return [
+                'success' => false,
+                'message' => 'Gagal mengambil data agent dari Qiscus: ' . $e->getMessage()
+            ];
+        }
     }
 
     public function assignQiscusAgent($qiscus_room_id, $qiscus_agent_id)
     {
-        Http::withHeaders([
-            "Qiscus-Secret-Key" => $this->qiscus_secret_key,
-            "Qiscus-App-Id" => $this->qiscus_app_id,
-        ])->post($this->qiscus_base_url . "/api/v1/admin/service/assign_agent", [
-            'room_id' => $qiscus_room_id,
-            'agent_id' => $qiscus_agent_id,
-        ]);
+        try {
+            Http::withHeaders([
+                "Qiscus-Secret-Key" => $this->qiscus_secret_key,
+                "Qiscus-App-Id"     => $this->qiscus_app_id,
+            ])->post($this->qiscus_base_url . "/api/v1/admin/service/assign_agent", [
+                'room_id'  => $qiscus_room_id,
+                'agent_id' => $qiscus_agent_id,
+            ]);
+
+            return true;
+        } catch (\Exception $e) {
+            Log::error('Gagal assign agent ke Qiscus: ' . $e->getMessage());
+            return false;
+        }
     }
 
-    // flow 2 -> get all agent yang ada & assign
     public function assignAgent()
     {
-        //  1. hit api qiscus get all agent
-        $data = $this->getAllQiscusAgents();
-        $agents = $data["data"]["agents"];
+        try {
+            // 1. hit api qiscus get all agent
+            $data   = $this->getAllQiscusAgents();
+            $agents = $data["data"]["agents"] ?? [];
 
-        foreach ($agents as $agent) {
-            Agent::firstOrCreate(
-                [
-                    'qiscus_agent_id' => $agent['id'],
-                ]
-            );
-        }
-
-        //  2. ambil semua chat room dengan status 'unserved'
-        $unservedRooms = ChatRoom::where('status', 'unserved')->orderBy('created_at', 'asc')->get();
-
-        $availableAgentIds = collect($agents)
-            ->filter(fn($a) => $a['is_available'] === true)
-            ->pluck('id')
-            ->toArray();
-
-        //  3. looping setiap chat_room unserved:
-        foreach ($unservedRooms as $room) {
-            $agent = Agent::whereIn('qiscus_agent_id', $availableAgentIds)
-                ->whereRaw("(SELECT COUNT(*) FROM chat_rooms WHERE agent_id = agents.id AND status = 'served') < max_customers")
-                ->first();
-
-            if (!$agent) {
-                break;
+            foreach ($agents as $agent) {
+                Agent::firstOrCreate(
+                    ['qiscus_agent_id' => $agent['id']]
+                );
             }
 
-            if ($agent) {
-                $this->assignQiscusAgent($room->qiscus_room_id, $agent->qiscus_agent_id);
+            // 2. ambil semua chat room dengan status 'unserved'
+            $unservedRooms = ChatRoom::where('status', 'unserved')->orderBy('created_at', 'asc')->get();
 
-                $room->update([
-                    'status' => 'served',
-                    'agent_id' => $agent->id
-                ]);
+            $availableAgentIds = collect($agents)
+                ->filter(fn($a) => $a['is_available'] === true)
+                ->pluck('id')
+                ->toArray();
+
+            // 3. looping setiap chat_room unserved
+            foreach ($unservedRooms as $room) {
+                $agent = Agent::whereIn('qiscus_agent_id', $availableAgentIds)
+                    ->whereRaw("(SELECT COUNT(*) FROM chat_rooms WHERE agent_id = agents.id AND status = 'served') < max_customers")
+                    ->first();
+
+                if (!$agent) {
+                    break; // tidak ada agent tersedia
+                }
+
+                if ($this->assignQiscusAgent($room->qiscus_room_id, $agent->qiscus_agent_id)) {
+                    $room->update([
+                        'status'   => 'served',
+                        'agent_id' => $agent->id
+                    ]);
+                }
             }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Assign agent selesai'
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal assign agent: ' . $e->getMessage()
+            ], 500);
         }
     }
 
     public function qiscusWebhook(Request $request)
     {
+        try {
+            Log::info('Qiscus Webhook Hit', $request->all());
 
-        Log::info('Qiscus Webhook Hit', $request->all());
+            $this->saveChatRoom($request);
+            $this->assignAgent();
 
-        $this->saveChatRoom($request);
-        $this->assignAgent();
+            return response()->json(['success' => true], 200);
+        } catch (\Exception $e) {
+            Log::error('Qiscus Webhook Error: ' . $e->getMessage());
 
-        return response()->json(['success' => true]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Webhook gagal diproses: ' . $e->getMessage()
+            ], 500);
+        }
     }
 }
